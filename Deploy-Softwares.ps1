@@ -1,126 +1,287 @@
-#Requires -Version 7.6
+```powershell
+#Requires -Version 5.1
 #Requires -RunAsAdministrator
 
 <#
 .SYNOPSIS
-    Script de Instalação Automatizada e Silenciosa (Versão Premium/Competição).
+    Instalação e atualização automatizada de softwares via Chocolatey.
+
 .DESCRIPTION
-    Arquitetura de implantação em massa. Gerencia softwares públicos via Chocolatey
-    e softwares corporativos privados via download direto.
-    Recursos:
-    - Zero Touch (Totalmente silencioso)
-    - Fallback de Execução e Validação de Dependências
-    - Logging Completo (Start-Transcript)
-    - Medição de tempo de execução (Performance)
+    - Instala o Chocolatey caso não esteja presente.
+    - Instala ou atualiza os softwares definidos na variável $Softwares.
+    - Todas as instalações são executadas de forma silenciosa.
+    - Não requer interação humana.
+    - Registra sucesso, falha e motivo da falha.
+    - Utiliza "choco upgrade", que instala o pacote caso não exista
+      e atualiza caso já esteja instalado.
 #>
 
-# Requisita privilégios administrativos
-#Requires -RunAsAdministrator
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = "Continue"
 
-# Configura log de auditoria
+# =========================================================================
+# CONFIGURAÇÕES
+# =========================================================================
+
 $LogPath = "C:\Temp\Deploy_Automacao.log"
-if (-not (Test-Path "C:\Temp")) { New-Item -ItemType Directory -Path "C:\Temp" | Out-Null }
-Start-Transcript -Path $LogPath -Append -Force | Out-Null
-
-$StartTime = Get-Date
-
-Write-Host "===========================================================" -ForegroundColor Cyan
-Write-Host "   SISTEMA DE DEPLOY AUTOMATIZADO - INÍCIO DA EXECUÇÃO     " -ForegroundColor Cyan
-Write-Host "===========================================================" -ForegroundColor Cyan
-Write-Host "Data/Hora: $StartTime" -ForegroundColor Gray
 
 # =========================================================================
-# LISTA DE SOFTWARES (ORDENADOS POR VELOCIDADE/PRIORIDADE)
+# SOFTWARES
 # =========================================================================
+# Nome       = Nome exibido no relatório
+# Pacote     = Nome do pacote no Chocolatey
+# Parametros = Parâmetros opcionais específicos do pacote
+# =========================================================================
+
 $Softwares = @(
-    # 1. NAVEGADORES E AGENTES (Rápidos)
-    @{ Tipo = "Chocolatey"; Nome = "googlechrome"; Versao = "" },
-    @{ Tipo = "Chocolatey"; Nome = "firefox"; Versao = "" },
-    @{ Tipo = "Chocolatey"; Nome = "glpi-agent"; Versao = "" },
-    
-    # [MESH AGENT] Como é gerado internamente pelo servidor da empresa,
-    # usamos um executável pequeno e oficial da Microsoft (Sysinternals) 
-    # apenas para a demonstração não falhar ao vivo na máquina dos jurados.
-    @{ 
-        Tipo       = "Instalador"
-        Nome       = "Mesh Agent (Demonstração Automática)"
-        Caminho    = "https://live.sysinternals.com/Bginfo.exe" 
-        Argumentos = "/timer:0 /silent /accepteula" 
+    @{
+        Nome       = "7-Zip (x64 edition)"
+        Pacote     = "7zip"
+        Parametros = ""
     },
-
-    # 2. SUÍTES E ANTIVÍRUS (Médios / Demorados)
-    # Usando o 'microsoft-teams-new-bootstrapper' porque o instalador antigo da Microsoft saiu do ar (Erro 404).
-    @{ Tipo = "Chocolatey"; Nome = "microsoft-teams-new-bootstrapper"; Versao = "" },
-
-    # [KASPERSKY] Antivírus corporativo requer licença e portal. 
-    # Para a competição rodar liso, usamos outro executável da Microsoft.
-    @{ 
-        Tipo       = "Instalador"
-        Nome       = "Kaspersky Endpoint Security (Demonstração Automática)"
-        Caminho    = "https://live.sysinternals.com/procexp.exe" 
-        Argumentos = "/accepteula" 
+    @{
+        Nome       = "GLPI Agent"
+        Pacote     = "glpi-agent"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Google Chrome"
+        Pacote     = "googlechrome"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Kaspersky Endpoint Security for Windows"
+        Pacote     = "kaspersky-endpoint-security"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Kaspersky Security Center Network Agent"
+        Pacote     = "kaspersky-agent"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Mesh Agent"
+        Pacote     = "meshcentral-agent"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Microsoft 365 Apps para grandes empresas - pt-BR"
+        Pacote     = "office365proplus"
+        Parametros = '--params "/Language:pt-br"'
+    },
+    @{
+        Nome       = "Microsoft Edge"
+        Pacote     = "microsoft-edge"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Microsoft OneDrive"
+        Pacote     = "onedrive"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Microsoft Teams"
+        Pacote     = "microsoft-teams-new-bootstrapper"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Microsoft Visual C++"
+        Pacote     = "vcredist-all"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Microsoft Windows Application"
+        Pacote     = "dotnet-desktopruntime"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Mozilla Firefox"
+        Pacote     = "firefox"
+        Parametros = ""
+    },
+    @{
+        Nome       = "Mozilla Maintenance Service"
+        Pacote     = "firefox"
+        Parametros = ""
+    },
+    @{
+        Nome       = "PDF24 Creator"
+        Pacote     = "pdf24"
+        Parametros = ""
     }
 )
 
 # =========================================================================
-# MOTOR DE INSTALAÇÃO
+# PREPARAÇÃO DO AMBIENTE
 # =========================================================================
 
-Write-Host "`n[1/2] Verificando motor de pacotes (Chocolatey)..." -ForegroundColor Yellow
-try {
-    $null = Get-Command choco -ErrorAction Stop
-    Write-Host "  -> Chocolatey detectado." -ForegroundColor Green
-} catch {
-    Write-Host "  -> Chocolatey não encontrado. Iniciando bootstrap silencioso..." -ForegroundColor DarkYellow
-    [System.Net.ServicePointManager]::SecurityProtocol = 3072
-    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-    $env:Path += ";$env:ALLUSERSPROFILE\chocolatey\bin"
+if (-not (Test-Path "C:\Temp")) {
+    New-Item -Path "C:\Temp" -ItemType Directory -Force | Out-Null
 }
 
-Write-Host "`n[2/2] Processando Fila de Softwares ($($Softwares.Count) itens)...`n" -ForegroundColor Yellow
+Start-Transcript -Path $LogPath -Append -Force | Out-Null
 
-foreach ($software in $Softwares) {
-    Write-Host ">> Instalando: $($software.Nome) [$($software.Tipo)]" -NoNewline
-    
+$Inicio = Get-Date
+
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "        DEPLOY AUTOMATIZADO VIA CHOCOLATEY" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "Início: $Inicio" -ForegroundColor Gray
+Write-Host "Quantidade de softwares: $($Softwares.Count)" -ForegroundColor Gray
+Write-Host ""
+
+# =========================================================================
+# VERIFICAÇÃO / INSTALAÇÃO DO CHOCOLATEY
+# =========================================================================
+
+Write-Host "[1/2] Verificando Chocolatey..." -ForegroundColor Yellow
+
+if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+
+    Write-Host "Chocolatey não encontrado. Instalando automaticamente..." -ForegroundColor Yellow
+
     try {
-        if ($software.Tipo -eq "Chocolatey") {
-            $argsChoco = @("upgrade", $software.Nome, "-y", "--no-progress", "--accept-license")
-            $process = Start-Process -FilePath "choco.exe" -ArgumentList $argsChoco -Wait -NoNewWindow -PassThru
-            
-            if ($process.ExitCode -in @(0, 1641, 3010)) {
-                Write-Host " [OK]" -ForegroundColor Green
-            } else { throw "Exit code $($process.ExitCode)" }
-            
-        } elseif ($software.Tipo -eq "Instalador") {
-            $caminhoArquivo = $software.Caminho
-            
-            if ($caminhoArquivo -match "^https?://") {
-                $caminhoDestino = Join-Path $env:TEMP "Deploy_$([guid]::NewGuid().ToString().Substring(0,8)).exe"
-                Invoke-WebRequest -Uri $caminhoArquivo -OutFile $caminhoDestino -UseBasicParsing
-                $caminhoArquivo = $caminhoDestino
-            }
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-            if (-not (Test-Path $caminhoArquivo)) { throw "Download falhou" }
-            
-            $process = Start-Process -FilePath $caminhoArquivo -ArgumentList $software.Argumentos -Wait -NoNewWindow -PassThru
-            
-            if ($process.ExitCode -in @(0, 3010)) {
-                Write-Host " [OK]" -ForegroundColor Green
-            } else { throw "Exit code $($process.ExitCode)" }
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+
+        $InstallScript = (New-Object Net.WebClient).DownloadString(
+            "https://community.chocolatey.org/install.ps1"
+        )
+
+        Invoke-Expression $InstallScript
+
+        $env:Path += ";$env:ALLUSERSPROFILE\chocolatey\bin"
+
+        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+            throw "Chocolatey foi instalado, mas o executável não foi encontrado no PATH."
         }
-    } catch {
-        Write-Host " [FALHA] - $_" -ForegroundColor Red
+
+        Write-Host "Chocolatey instalado com sucesso." -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Não foi possível instalar o Chocolatey." -ForegroundColor Red
+        Write-Host "Motivo: $($_.Exception.Message)" -ForegroundColor Red
+
+        Stop-Transcript | Out-Null
+        exit 1
+    }
+}
+else {
+    Write-Host "Chocolatey já está instalado." -ForegroundColor Green
+}
+
+# Configurações para execução automática
+choco config set --name=allowGlobalConfirmation --value=true | Out-Null
+choco config set --name=autoUninstaller --value=true | Out-Null
+
+Write-Host ""
+
+# =========================================================================
+# INSTALAÇÃO / ATUALIZAÇÃO DOS SOFTWARES
+# =========================================================================
+
+Write-Host "[2/2] Instalando/atualizando softwares..." -ForegroundColor Yellow
+Write-Host ""
+
+$Relatorio = foreach ($Software in $Softwares) {
+
+    Write-Host ("{0,-55}" -f $Software.Nome) -NoNewline
+
+    $Argumentos = @(
+        "upgrade"
+        $Software.Pacote
+        "-y"
+        "--no-progress"
+        "--accept-license"
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Software.Parametros)) {
+        $Argumentos += $Software.Parametros
+    }
+
+    try {
+
+        $Saida = & choco.exe @Argumentos 2>&1
+        $CodigoSaida = $LASTEXITCODE
+
+        if ($CodigoSaida -in @(0, 1641, 3010)) {
+
+            Write-Host "[OK]" -ForegroundColor Green
+
+            [PSCustomObject]@{
+                Software = $Software.Nome
+                Pacote   = $Software.Pacote
+                Status   = "INSTALADO/ATUALIZADO"
+                Detalhes = "Instalação ou atualização concluída com sucesso."
+            }
+        }
+        else {
+
+            $DetalhesErro = ($Saida | Select-Object -Last 8) -join " "
+
+            Write-Host "[FALHA]" -ForegroundColor Red
+
+            [PSCustomObject]@{
+                Software = $Software.Nome
+                Pacote   = $Software.Pacote
+                Status   = "NÃO INSTALADO"
+                Detalhes = "Código Chocolatey: $CodigoSaida. $DetalhesErro"
+            }
+        }
+    }
+    catch {
+
+        Write-Host "[ERRO]" -ForegroundColor Red
+
+        [PSCustomObject]@{
+            Software = $Software.Nome
+            Pacote   = $Software.Pacote
+            Status   = "NÃO INSTALADO"
+            Detalhes = $_.Exception.Message
+        }
     }
 }
 
-$EndTime = Get-Date
-$ExecutionTime = ($EndTime - $StartTime).TotalSeconds
+# =========================================================================
+# RESUMO
+# =========================================================================
 
-Write-Host "`n===========================================================" -ForegroundColor Cyan
-Write-Host "   DEPLOY FINALIZADO COM SUCESSO!                          " -ForegroundColor Cyan
-Write-Host "   Tempo total: $([math]::Round($ExecutionTime, 2)) segundos" -ForegroundColor Cyan
-Write-Host "   Log detalhado salvo em: $LogPath                        " -ForegroundColor Gray
-Write-Host "===========================================================" -ForegroundColor Cyan
+$Fim = Get-Date
+$Tempo = ($Fim - $Inicio).TotalSeconds
+
+$Sucesso = @(
+    $Relatorio | Where-Object {
+        $_.Status -eq "INSTALADO/ATUALIZADO"
+    }
+).Count
+
+$Falhas = @(
+    $Relatorio | Where-Object {
+        $_.Status -eq "NÃO INSTALADO"
+    }
+).Count
+
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "                    RESULTADO FINAL" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+
+$Relatorio | Format-Table -AutoSize `
+    Software,
+    Pacote,
+    Status,
+    Detalhes
+
+Write-Host ""
+Write-Host "Total de softwares : $($Softwares.Count)" -ForegroundColor Cyan
+Write-Host "Sucesso             : $Sucesso" -ForegroundColor Green
+Write-Host "Falhas              : $Falhas" -ForegroundColor $(if ($Falhas -gt 0) { "Red" } else { "Green" })
+Write-Host "Tempo de execução   : $([math]::Round($Tempo, 2)) segundos" -ForegroundColor Cyan
+Write-Host "Log                 : $LogPath" -ForegroundColor Gray
+
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
 
 Stop-Transcript | Out-Null
+```
